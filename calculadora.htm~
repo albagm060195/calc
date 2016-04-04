@@ -12,6 +12,11 @@ function inverso() {
   var num = document.getElementById("n1");
   num.value = 1/num.value;
 }
+function cubo() {
+  var num = document.getElementById("n1");
+  num.value = num.value * num.value * num.value;
+
+}
 </script>
 </head>
 <body>
