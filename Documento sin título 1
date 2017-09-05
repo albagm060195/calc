@@ -1,0 +1,787 @@
+/**
+  ******************************************************************************
+  * File Name          : main.c
+  * Description        : Main program body
+  ******************************************************************************
+  *
+  * Copyright (c) 2017 STMicroelectronics International N.V. 
+  * All rights reserved.
+  *
+  * Redistribution and use in source and binary forms, with or without 
+  * modification, are permitted, provided that the following conditions are met:
+  *
+  * 1. Redistribution of source code must retain the above copyright notice, 
+  *    this list of conditions and the following disclaimer.
+  * 2. Redistributions in binary form must reproduce the above copyright notice,
+  *    this list of conditions and the following disclaimer in the documentation
+  *    and/or other materials provided with the distribution.
+  * 3. Neither the name of STMicroelectronics nor the names of other 
+  *    contributors to this software may be used to endorse or promote products 
+  *    derived from this software without specific written permission.
+  * 4. This software, including modifications and/or derivative works of this 
+  *    software, must execute solely and exclusively on microcontroller or
+  *    microprocessor devices manufactured by or for STMicroelectronics.
+  * 5. Redistribution and use of this software other than as permitted under 
+  *    this license is void and will automatically terminate your rights under 
+  *    this license. 
+  *
+  * THIS SOFTWARE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS "AS IS" 
+  * AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT 
+  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
+  * PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY
+  * RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT 
+  * SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+  * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, 
+  * OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
+  * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING 
+  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  ******************************************************************************
+  */
+/* Includes ------------------------------------------------------------------*/
+
+
+/* USER CODE BEGIN Includes */
+#include "main.h"
+#include "stm32f0xx_hal.h"
+#include "cmsis_os.h"
+#include "task.h"
+//NUEVO
+#include <assert.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <time.h>
+#include <signal.h>
+#include "fsm.h"
+#include "FreeRTOS.h"
+#include "semphr.h"
+/* USER CODE END Includes */
+
+
+
+/* USER CODE BEGIN PV */
+/* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc;
+int ADC_raw[3];
+int i,flag;
+float Vdd;
+int32_t temperature; /* will contain the temperature in degrees Celsius */
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+void Error_Handler(void);
+static void MX_GPIO_Init(void);
+static void MX_ADC_Init(void);
+
+
+/* USER CODE BEGIN PFP */
+/* Private function prototypes -----------------------------------------------*/
+
+/* USER CODE END PFP */
+
+/* USER CODE BEGIN 0 */
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
+	if(__HAL_ADC_GET_FLAG(hadc, ADC_FLAG_EOC)){
+		ADC_raw[i] = HAL_ADC_GetValue(hadc);
+		i++;
+	}
+	if(__HAL_ADC_GET_FLAG(hadc, ADC_FLAG_EOS)){//Interrupcion que aparece cuando se llenan los  valores
+		i=0;
+		Vdd= 3300 *(*VREFINT_CAL_ADDR)/ ADC_raw[2];
+		temperature = (((int32_t) ADC_raw[1] * Vdd / 3300)- (int32_t) *TEMP30_CAL_ADDR );
+		temperature = temperature * (int32_t)(110 - 30);
+		temperature = temperature / (int32_t)(*TEMP110_CAL_ADDR - *TEMP30_CAL_ADDR);
+		temperature = temperature + 30;
+
+
+	}
+}
+
+#define CUP_TIME	250
+#define COFFEE_TIME	3000
+#define MILK_TIME	3000
+
+#define Precio  50
+
+int dinero_actual = 0;
+int dinero_a_devolver = 0;
+int pagado = 0;
+struct timespec tiempo;
+struct timespec tiempo_monedero;
+double tiempoTotal;
+double tiempoTotal2;
+int fin = 0;
+
+
+TickType_t EndTimer = 0;
+SemaphoreHandle_t xMutex;
+
+static int button = 0;
+
+/* USER CODE END 0 */
+
+enum cofm_state {
+  COFM_WAITING,
+  COFM_CUP,
+  COFM_COFFEE,
+  COFM_MILK,
+  COFM_FINISH,
+  PAGAR,
+  DEVOLVER,
+};
+
+
+static int button_pressed(fsm_t* this){
+
+	if(dinero_actual >= 50 && button){
+
+		  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,1);
+          //HAL_Delay(3000);
+          //HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,0);
+          pagado = 1;
+		  return 1;
+
+	  }
+
+	  return 0;
+
+}
+
+
+
+
+
+
+static void timer_start (int ms)
+{
+	TickType_t valorAnterior;
+	const TickType_t xBlockTime = pdMS_TO_TICKS(ms);
+	valorAnterior = xTaskGetTickCount();
+	EndTimer = valorAnterior + xBlockTime;
+}
+
+
+
+static int timer_finished (fsm_t* this)
+{
+
+	TickType_t valorAhora = xTaskGetTickCount();
+	if(valorAhora > EndTimer){
+		HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+	}
+
+
+    return valorAhora > EndTimer;
+}
+
+
+static void Comprobacion_Dinero(){
+
+
+	if(HAL_GPIO_ReadPin(GPIOA,GPIO_PIN_2)){
+
+
+		if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_8)){
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+		}
+		else{
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		}
+
+
+		dinero_actual = dinero_actual + 200;
+
+	}
+
+
+
+	if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_6)){
+
+		if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_8)){
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+		}
+		else{
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		}
+		dinero_actual = dinero_actual + 100;
+
+	}
+
+
+	if(HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_15)){
+
+		if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_8)){
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+		}
+		else{
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		}
+		dinero_actual = dinero_actual + 50;
+
+	}
+
+	if(HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_14)){
+
+		if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_8)){
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+		}
+		else{
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		}
+
+		dinero_actual = dinero_actual + 20;
+
+
+	}
+
+	if(HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_13)){
+
+		if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_8)){
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+		}
+		else{
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		}
+		dinero_actual = dinero_actual + 10;
+
+	}
+
+	if(HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_12)){
+
+		if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_8)){
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+		}
+		else{
+
+			HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		}
+		dinero_actual = dinero_actual + 5;
+
+	}
+	if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_7)){
+
+		button = 1;
+	}
+
+//dinero_a_devolver = dinero_actual - Precio;
+
+}
+
+
+
+static void Ya_pagado ()
+{
+  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,0);
+  pagado = 0;
+  fin = 0;
+
+}
+
+static int Ha_pagado (){
+	Comprobacion_Dinero();
+	if(pagado==1 && fin==1){
+	HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,1);
+	return 1;}
+	return 0;
+}
+
+
+//HAY QUE CAMBIARLA
+static void Devolver(fsm_t* this){
+
+	dinero_a_devolver = dinero_actual - Precio;
+
+	if(dinero_a_devolver>=200){
+
+		dinero_a_devolver -= 200;
+	}
+	 if(dinero_a_devolver>=100 && dinero_a_devolver<200){
+
+
+			dinero_a_devolver -= 100;
+		}
+	 if(dinero_a_devolver>=50 && dinero_a_devolver<100){
+
+			dinero_a_devolver -= 50;
+		}
+	 if(dinero_a_devolver>=20 && dinero_a_devolver<50){
+
+			dinero_a_devolver -= 20;
+		}
+	 if(dinero_a_devolver>=10 && dinero_a_devolver<20){
+
+			dinero_a_devolver -= 10;
+		}
+	 if(dinero_a_devolver>=5&& dinero_a_devolver<10){
+
+
+		dinero_a_devolver -= 5;
+		}
+
+
+}
+
+
+static int Devuelto(){
+	//printf("Dinero devuelto \n");
+	if(dinero_a_devolver==0){
+	    dinero_actual = 0;
+	    HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+		return 1;
+		 }
+		return 0;
+}
+
+static void finish (fsm_t* this)
+{
+
+	HAL_GPIO_WritePin(GPIOC,GPIO_PIN_9,0);
+	button=0;
+	printf("Cafe listo para retirar \n");
+    fin = 1;
+
+}
+
+static void cup (fsm_t* this)
+{
+
+  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+  timer_start (CUP_TIME);
+  button = 0;
+}
+
+static void coffee (fsm_t* this)
+{
+  printf("se mete en coffee \n");
+  timer_start (COFFEE_TIME);
+  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+
+}
+
+static void milk (fsm_t* this)
+{
+	printf("se mete en milk \n");
+	HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+	timer_start (MILK_TIME);
+
+
+}
+
+
+// Explicit FSM description
+static fsm_trans_t cofm[] = {
+  { COFM_WAITING, button_pressed, COFM_CUP,     cup    },
+  { COFM_CUP,     timer_finished, COFM_COFFEE,  coffee },
+  { COFM_COFFEE,  timer_finished, COFM_MILK,    milk   },
+  { COFM_MILK,    timer_finished, COFM_WAITING, finish },
+  {-1, NULL, -1, NULL },
+};
+
+//Explicit FSM description
+static fsm_trans_t monedero[] = {
+  { PAGAR, Ha_pagado, DEVOLVER, Devolver},
+  { DEVOLVER, Devuelto, PAGAR,Ya_pagado },   //DEVUELVE EL DINERO CUANDO HA ACABADO DE ECHAR LA LECHE
+  {-1, NULL, -1, NULL },
+};
+
+
+//-----------------------------------------------FUNCIONES THREADS
+
+
+/* StartTask02 function */
+void StartTask02(void  * pvParameters)
+{
+
+	TickType_t xLastWakeTime;
+	const TickType_t segundosEnTicks = pdMS_TO_TICKS(250);
+	xLastWakeTime = xTaskGetTickCount();
+	fsm_t* cofm_fsm = fsm_new (cofm);
+  /* USER CODE BEGIN StartTask02 */
+  /* Infinite loop */
+  while(1)
+  {
+
+	xSemaphoreTake(xMutex, 10);
+	//Comprobacion_Dinero();
+	//Difinimos las máquina de estados
+	fsm_fire (cofm_fsm);
+    xSemaphoreGive(xMutex);
+	vTaskDelayUntil(&xLastWakeTime, segundosEnTicks);
+
+
+  }
+  /* USER CODE END StartTask02 */
+}
+
+
+/* StartTask03 function */
+void StartTask03(void  * pvParameters)
+{
+  /* USER CODE BEGIN StartTask03 */
+
+	TickType_t xLastWakeTime;
+	const TickType_t segundosEnTicks = pdMS_TO_TICKS(250);
+	xLastWakeTime = xTaskGetTickCount();
+	fsm_t* cofm_monedero = fsm_new (monedero);
+
+  /* Infinite loop */
+  while(1)
+  {
+	  xSemaphoreTake(xMutex,(portTickType) 10);
+	  //Comprobacion_Dinero();
+	  //Difinimos las máquina de estados
+	  fsm_fire (cofm_monedero);
+	  xSemaphoreGive(xMutex);
+      vTaskDelayUntil(&xLastWakeTime, segundosEnTicks);
+  }
+  /* USER CODE END StartTask03 */
+}
+
+
+/* StartTask04 function */
+void StartTask04(void  * pvParameters)
+{
+  /* USER CODE BEGIN StartTask04 */
+  /* Infinite loop */
+  while(1)
+  {
+
+	  HAL_ADC_Start_IT(&hadc);
+	  if (temperature > 30){
+		  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,1);
+	  }
+	  else{
+		  HAL_GPIO_WritePin(GPIOC,GPIO_PIN_8,0);
+
+	  }
+  }
+  /* USER CODE END StartTask04 */
+}
+
+int main(void)
+{
+
+
+  HAL_Init();
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_ADC_Init();
+
+  /* USER CODE BEGIN 2 */
+  HAL_ADC_Start_IT(&hadc);
+  /* USER CODE END 2 */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+   xMutex = xSemaphoreCreateMutex();
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+
+      /* Create the task, storing the handle. */
+
+
+  /* Function that creates a task. */
+
+  BaseType_t xReturned;
+  TaskHandle_t xHandle = NULL;
+
+      /* Create the task, storing the handle. */
+  xTaskCreate(
+		  StartTask02,       /* Function that implements the task. */
+		  ( signed char * ) "TaskMaquina",          /* Text name for the task. */
+		  configMINIMAL_STACK_SIZE,      /* Stack size in words, not bytes. */
+		  ( void * ) NULL,    /* Parameter passed into the task. */
+		  0,/* Priority at which the task is created. */
+		  &xHandle );      /* Used to pass out the created task's handle. */
+
+  xTaskCreate(
+		  StartTask03,       /* Function that implements the task. */
+		  ( signed char * ) "TaskMonedero",          /* Text name for the task. */
+		  configMINIMAL_STACK_SIZE,      /* Stack size in words, not bytes. */
+		  ( void * ) NULL,    /* Parameter passed into the task. */
+		  0,/* Priority at which the task is created. */
+		  &xHandle );      /* Used to pass out the created task's handle. */
+
+
+  xTaskCreate(
+ 		  StartTask04,       /* Function that implements the task. */
+ 		  ( signed char * ) "TaskTemperatura",          /* Text name for the task. */
+ 		  configMINIMAL_STACK_SIZE,      /* Stack size in words, not bytes. */
+ 		  ( void * ) NULL,    /* Parameter passed into the task. */
+ 		  0,/* Priority at which the task is created. */
+ 		  &xHandle );      /* Used to pass out the created task's handle. */
+
+
+
+
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+ 
+
+  /* Start scheduler */
+
+  vTaskStartScheduler();
+
+  /* We should never get here as control is now taken by the scheduler */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+
+ /* while (1){
+
+
+  }  */
+
+
+  /* USER CODE END 3 */
+
+}
+
+/** System Clock Configuration
+*/
+void SystemClock_Config(void)
+{
+
+  RCC_OscInitTypeDef RCC_OscInitStruct;
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+
+    /**Initializes the CPU, AHB and APB busses clocks 
+    */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSI14;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSI14State = RCC_HSI14_ON;
+  RCC_OscInitStruct.HSICalibrationValue = 16;
+  RCC_OscInitStruct.HSI14CalibrationValue = 16;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12;
+  RCC_OscInitStruct.PLL.PREDIV = RCC_PREDIV_DIV1;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+    /**Initializes the CPU, AHB and APB busses clocks 
+    */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+    /**Configure the Systick interrupt time 
+    */
+  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+
+    /**Configure the Systick 
+    */
+  HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
+
+  /* SysTick_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+}
+
+/* ADC init function */
+static void MX_ADC_Init(void)
+{
+
+  ADC_ChannelConfTypeDef sConfig;
+
+    /**Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion) 
+    */
+  hadc.Instance = ADC1;
+  hadc.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
+  hadc.Init.EOCSelection = ADC_EOC_SINGLE_SEQ_CONV;
+  hadc.Init.LowPowerAutoWait = DISABLE;
+  hadc.Init.LowPowerAutoPowerOff = DISABLE;
+  hadc.Init.ContinuousConvMode = DISABLE;
+  hadc.Init.DiscontinuousConvMode = DISABLE;
+  hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc.Init.DMAContinuousRequests = DISABLE;
+  hadc.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+  if (HAL_ADC_Init(&hadc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+    /**Configure for the selected ADC regular channel to be converted. 
+    */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
+  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+    /**Configure for the selected ADC regular channel to be converted. 
+    */
+  sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
+  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+    /**Configure for the selected ADC regular channel to be converted. 
+    */
+  sConfig.Channel = ADC_CHANNEL_VREFINT;
+  if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+}
+
+/** Configure pins as 
+        * Analog 
+        * Input 
+        * Output
+        * EVENT_OUT
+        * EXTI
+*/
+static void MX_GPIO_Init(void)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct;
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, LD4_Pin|LD3_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : B1_Pin PA2 */
+  GPIO_InitStruct.Pin = B1_Pin|GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB12 PB13 PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PC6 PC7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LD4_Pin LD3_Pin */
+  GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
+
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+
+
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @param  None
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler */
+  /* User can add his own implementation to report the HAL error return state */
+  while(1) 
+  {
+  }
+  /* USER CODE END Error_Handler */ 
+}
+
+#ifdef USE_FULL_ASSERT
+
+/**
+   * @brief Reports the name of the source file and the source line number
+   * where the assert_param error has occurred.
+   * @param file: pointer to the source file name
+   * @param line: assert_param error line source number
+   * @retval None
+   */
+void assert_failed(uint8_t* file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+    ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+
+}
+
+#endif
+
+/**
+  * @}
+  */ 
+
+/**
+  * @}
+*/ 
+
+/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
+
